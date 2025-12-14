@@ -44,24 +44,22 @@ type Response struct {
 
 // CacheProg implements the GOCACHEPROG protocol.
 type CacheProg struct {
-	backend CacheBackend
-	scanner *bufio.Scanner
-	writer  *bufio.Writer
+	backend  CacheBackend
+	reader   *bufio.Reader
+	writer   *bufio.Writer
+	debug    bool
+	putCount int
+	getCount int
+	hitCount int
 }
 
 // NewCacheProg creates a new cache program instance.
-func NewCacheProg(backend CacheBackend) *CacheProg {
-	scanner := bufio.NewScanner(os.Stdin)
-	// Increase buffer size to handle large cache entries (default is 64KB)
-	// Set to 10MB to handle large build artifacts
-	const maxScanTokenSize = 10 * 1024 * 1024
-	buf := make([]byte, maxScanTokenSize)
-	scanner.Buffer(buf, maxScanTokenSize)
-
+func NewCacheProg(backend CacheBackend, debug bool) *CacheProg {
 	return &CacheProg{
 		backend: backend,
-		scanner: scanner,
+		reader:  bufio.NewReader(os.Stdin),
 		writer:  bufio.NewWriter(os.Stdout),
+		debug:   debug,
 	}
 }
 
@@ -91,54 +89,56 @@ func (cp *CacheProg) SendInitialResponse() error {
 	})
 }
 
-// ReadRequest reads a request from stdin.
-func (cp *CacheProg) ReadRequest() (*Request, error) {
-	// Read lines until we get a non-empty one
-	var line string
+// readLine reads a line from stdin, skipping empty lines.
+func (cp *CacheProg) readLine() ([]byte, error) {
 	for {
-		if !cp.scanner.Scan() {
-			if err := cp.scanner.Err(); err != nil {
-				return nil, fmt.Errorf("failed to read request: %w", err)
-			}
-			return nil, io.EOF
+		line, err := cp.reader.ReadBytes('\n')
+		if err != nil {
+			return nil, err
 		}
 
-		line = cp.scanner.Text()
+		// Remove trailing newline
+		line = line[:len(line)-1]
+
 		// Skip empty lines
-		if strings.TrimSpace(line) != "" {
-			break
+		if len(strings.TrimSpace(string(line))) > 0 {
+			return line, nil
 		}
+	}
+}
+
+// ReadRequest reads a request from stdin.
+func (cp *CacheProg) ReadRequest() (*Request, error) {
+	// Read the request line
+	line, err := cp.readLine()
+	if err != nil {
+		if err == io.EOF {
+			return nil, io.EOF
+		}
+		return nil, fmt.Errorf("failed to read request: %w", err)
 	}
 
 	var req Request
-	if err := json.Unmarshal([]byte(line), &req); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal request: %w (line: %q)", err, line)
+	if err := json.Unmarshal(line, &req); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal request: %w (line: %q)", err, string(line))
 	}
 
 	// For "put" commands with BodySize > 0, read the base64 body on the next line
 	if req.Command == CmdPut && req.BodySize > 0 {
-		// Read the body line, skipping any empty lines
-		var bodyLine string
-		for {
-			if !cp.scanner.Scan() {
-				if err := cp.scanner.Err(); err != nil {
-					return nil, fmt.Errorf("error reading body line: %w", err)
-				}
+		// Read the body line
+		bodyLine, err := cp.readLine()
+		if err != nil {
+			if err == io.EOF {
 				// EOF reached without finding body - connection closed
-				// Return EOF to exit gracefully
 				return nil, io.EOF
 			}
-			bodyLine = cp.scanner.Text()
-			// Skip empty lines
-			if strings.TrimSpace(bodyLine) != "" {
-				break
-			}
+			return nil, fmt.Errorf("error reading body line: %w", err)
 		}
 
 		// The body is sent as a base64-encoded JSON string (a JSON string literal)
 		var base64Str string
-		if err := json.Unmarshal([]byte(bodyLine), &base64Str); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal body as JSON string: %w (line: %q)", err, bodyLine)
+		if err := json.Unmarshal(bodyLine, &base64Str); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal body as JSON string: %w (line: %q)", err, string(bodyLine))
 		}
 
 		bodyData, err := base64.StdEncoding.DecodeString(base64Str)
@@ -159,6 +159,7 @@ func (cp *CacheProg) HandleRequest(req *Request) error {
 
 	switch req.Command {
 	case CmdPut:
+		cp.putCount++
 		diskPath, err := cp.backend.Put(req.ActionID, req.OutputID, req.Body, req.BodySize)
 		if err != nil {
 			resp.Err = err.Error()
@@ -167,12 +168,14 @@ func (cp *CacheProg) HandleRequest(req *Request) error {
 		}
 
 	case CmdGet:
+		cp.getCount++
 		outputID, diskPath, size, putTime, miss, err := cp.backend.Get(req.ActionID)
 		if err != nil {
 			resp.Err = err.Error()
 		} else {
 			resp.Miss = miss
 			if !miss {
+				cp.hitCount++
 				resp.OutputID = outputID
 				resp.DiskPath = diskPath
 				resp.Size = size
@@ -218,6 +221,20 @@ func (cp *CacheProg) Run() error {
 		if req.Command == CmdClose {
 			break
 		}
+	}
+
+	// Print statistics in debug mode
+	if cp.debug {
+		missCount := cp.getCount - cp.hitCount
+		hitRate := 0.0
+		if cp.getCount > 0 {
+			hitRate = float64(cp.hitCount) / float64(cp.getCount) * 100
+		}
+		fmt.Fprintf(os.Stderr, "[DEBUG] Cache statistics:\n")
+		fmt.Fprintf(os.Stderr, "[DEBUG]   GET operations: %d (hits: %d, misses: %d, hit rate: %.1f%%)\n",
+			cp.getCount, cp.hitCount, missCount, hitRate)
+		fmt.Fprintf(os.Stderr, "[DEBUG]   PUT operations: %d\n", cp.putCount)
+		fmt.Fprintf(os.Stderr, "[DEBUG]   Total operations: %d\n", cp.getCount+cp.putCount)
 	}
 
 	return nil

@@ -8,10 +8,6 @@ import (
 	"strings"
 )
 
-
-
-
-
 func main() {
 	if len(os.Args) < 2 {
 		// No subcommand, run the server
@@ -54,7 +50,7 @@ func runServer() {
 	defer backend.Close()
 
 	// Create and run cache program
-	prog := NewCacheProg(backend)
+	prog := NewCacheProg(backend, debug)
 	if err := prog.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running cache program: %v\n", err)
 		os.Exit(1)
@@ -81,7 +77,6 @@ func runClear() {
 
 	fmt.Fprintf(os.Stdout, "Cache cleared successfully\n")
 }
-
 
 func getCacheDir() string {
 	cacheDir := os.Getenv("CACHE_DIR")
