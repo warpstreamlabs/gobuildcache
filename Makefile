@@ -35,5 +35,5 @@ clear: build
 
 test:
 	@echo "Running tests..."
-	go test -v -race .
+	go test -count 1 -v -race .
 

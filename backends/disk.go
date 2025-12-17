@@ -1,18 +1,26 @@
 package backends
 
 import (
+	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
 // Disk implements Backend using the local file system.
+// It uses per-key locking to allow concurrent operations on different keys
+// while ensuring safety for operations on the same key.
 type Disk struct {
 	baseDir string
+
+	// Per-key locks for fine-grained concurrency control
+	locksMu sync.RWMutex
+	locks   map[string]*sync.Mutex
 }
 
 // NewDisk creates a new disk-based cache backend.
@@ -24,43 +32,99 @@ func NewDisk(baseDir string) (*Disk, error) {
 
 	return &Disk{
 		baseDir: baseDir,
+		locks:   make(map[string]*sync.Mutex),
 	}, nil
 }
 
-// Put stores an object in the cache.
+// getLock gets or creates a lock for a specific actionID.
+// This allows concurrent operations on different keys while serializing
+// operations on the same key.
+func (d *Disk) getLock(actionID []byte) *sync.Mutex {
+	key := hex.EncodeToString(actionID)
+
+	d.locksMu.RLock()
+	lock, exists := d.locks[key]
+	d.locksMu.RUnlock()
+
+	if exists {
+		return lock
+	}
+
+	// Lock doesn't exist, create it
+	d.locksMu.Lock()
+	defer d.locksMu.Unlock()
+
+	// Double-check after acquiring write lock
+	lock, exists = d.locks[key]
+	if exists {
+		return lock
+	}
+
+	lock = &sync.Mutex{}
+	d.locks[key] = lock
+	return lock
+}
+
+// Put stores an object in the cache atomically.
+// Uses write-to-temp-then-rename to ensure Get operations never see partial writes.
 func (d *Disk) Put(actionID, outputID []byte, body io.Reader, bodySize int64) (string, error) {
+	// Acquire per-key lock to prevent concurrent writes to the same actionID
+	lock := d.getLock(actionID)
+	lock.Lock()
+	defer lock.Unlock()
+
 	diskPath := d.actionIDToPath(actionID)
 	metaPath := d.metadataPath(actionID)
 
-	// Create the cache file
-	file, err := os.Create(diskPath)
+	// Create temporary files for atomic write
+	tmpFile, err := d.createTempFile()
 	if err != nil {
-		return "", fmt.Errorf("failed to create cache file: %w", err)
+		return "", fmt.Errorf("failed to create temp file: %w", err)
 	}
-	defer file.Close()
+	tmpFilePath := tmpFile.Name()
+	defer os.Remove(tmpFilePath) // Clean up temp file if something goes wrong
 
-	// Write the body to the file (skip if bodySize is 0)
+	tmpMetaPath := tmpFilePath + ".meta"
+	defer os.Remove(tmpMetaPath) // Clean up temp meta file if something goes wrong
+
+	// Write the body to the temp file (skip if bodySize is 0)
 	var written int64
 	if bodySize > 0 && body != nil {
-		written, err = io.Copy(file, body)
+		written, err = io.Copy(tmpFile, body)
 		if err != nil {
-			os.Remove(diskPath)
+			tmpFile.Close()
 			return "", fmt.Errorf("failed to write cache file: %w", err)
 		}
 
 		if written != bodySize {
-			os.Remove(diskPath)
+			tmpFile.Close()
 			return "", fmt.Errorf("size mismatch: expected %d, wrote %d", bodySize, written)
 		}
 	}
 
-	// Write metadata file
+	// Close the temp file before renaming
+	if err := tmpFile.Close(); err != nil {
+		return "", fmt.Errorf("failed to close temp file: %w", err)
+	}
+
+	// Write metadata to temp file
 	now := time.Now()
 	meta := fmt.Sprintf("outputID:%s\nsize:%d\ntime:%d\n",
 		hex.EncodeToString(outputID), bodySize, now.Unix())
-	if err := os.WriteFile(metaPath, []byte(meta), 0644); err != nil {
-		os.Remove(diskPath)
+	if err := os.WriteFile(tmpMetaPath, []byte(meta), 0644); err != nil {
 		return "", fmt.Errorf("failed to write metadata: %w", err)
+	}
+
+	// Atomically rename temp files to final destination
+	// This ensures Get operations never see partial writes
+	if err := os.Rename(tmpMetaPath, metaPath); err != nil {
+		return "", fmt.Errorf("failed to rename metadata file: %w", err)
+	}
+
+	if err := os.Rename(tmpFilePath, diskPath); err != nil {
+		// Try to clean up the metadata file if data file rename fails
+		os.Remove(metaPath)
+		return "", fmt.Errorf("failed to rename cache file: %w", err)
 	}
 
 	absPath, err := filepath.Abs(diskPath)
@@ -72,7 +136,13 @@ func (d *Disk) Put(actionID, outputID []byte, body io.Reader, bodySize int64) (s
 }
 
 // Get retrieves an object from the cache.
+// Uses per-key locking to ensure it never sees partial Put operations.
 func (d *Disk) Get(actionID []byte) ([]byte, string, int64, *time.Time, bool, error) {
+	// Acquire per-key lock to ensure we don't read during a write
+	lock := d.getLock(actionID)
+	lock.Lock()
+	defer lock.Unlock()
+
 	diskPath := d.actionIDToPath(actionID)
 	metaPath := d.metadataPath(actionID)
 
@@ -84,6 +154,8 @@ func (d *Disk) Get(actionID []byte) ([]byte, string, int64, *time.Time, bool, er
 	// Read metadata
 	metaData, err := os.ReadFile(metaPath)
 	if err != nil {
+		// If metadata is missing but data file exists, treat as miss
+		// This can happen if a Put operation was interrupted
 		return nil, "", 0, nil, true, nil
 	}
 
@@ -107,6 +179,7 @@ func (d *Disk) Get(actionID []byte) ([]byte, string, int64, *time.Time, bool, er
 
 	outputID, err := hex.DecodeString(outputIDHex)
 	if err != nil {
+		// Corrupted metadata, treat as miss
 		return nil, "", 0, nil, true, nil
 	}
 
@@ -122,12 +195,20 @@ func (d *Disk) Get(actionID []byte) ([]byte, string, int64, *time.Time, bool, er
 
 // Close performs cleanup operations.
 func (d *Disk) Close() error {
-	// No cleanup needed for disk backend
+	// Clean up the lock map to free memory
+	d.locksMu.Lock()
+	d.locks = make(map[string]*sync.Mutex)
+	d.locksMu.Unlock()
 	return nil
 }
 
 // Clear removes all entries from the cache.
 func (d *Disk) Clear() error {
+	// No need for per-key locks since we're clearing everything
+	// But we should ensure no operations are in progress
+	d.locksMu.Lock()
+	defer d.locksMu.Unlock()
+
 	// Read all files in the cache directory
 	entries, err := os.ReadDir(d.baseDir)
 	if err != nil {
@@ -146,7 +227,27 @@ func (d *Disk) Clear() error {
 		}
 	}
 
+	// Clear the lock map since all keys are now gone
+	d.locks = make(map[string]*sync.Mutex)
+
 	return nil
+}
+
+// createTempFile creates a temporary file in the cache directory.
+func (d *Disk) createTempFile() (*os.File, error) {
+	// Generate a random temp file name
+	var randBytes [16]byte
+	if _, err := rand.Read(randBytes[:]); err != nil {
+		return nil, fmt.Errorf("failed to generate random bytes: %w", err)
+	}
+	tmpName := filepath.Join(d.baseDir, ".tmp."+hex.EncodeToString(randBytes[:]))
+
+	file, err := os.Create(tmpName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create temp file: %w", err)
+	}
+
+	return file, nil
 }
 
 // actionIDToPath converts an actionID to a file path.
