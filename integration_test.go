@@ -62,6 +62,7 @@ func TestCacheIntegration(t *testing.T) {
 	firstRunCmd.Env = append(os.Environ(),
 		"GOCACHEPROG="+binaryPath,
 		"BACKEND_TYPE=disk",
+		"DEBUG=true",
 		"CACHE_DIR="+cacheDir)
 
 	var firstRunOutput bytes.Buffer
@@ -87,6 +88,7 @@ func TestCacheIntegration(t *testing.T) {
 	secondRunCmd.Env = append(os.Environ(),
 		"GOCACHEPROG="+binaryPath,
 		"BACKEND_TYPE=disk",
+		"DEBUG=true",
 		"CACHE_DIR="+cacheDir)
 
 	var secondRunOutput bytes.Buffer

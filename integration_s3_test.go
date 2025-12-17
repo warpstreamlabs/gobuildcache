@@ -87,6 +87,7 @@ func TestCacheIntegrationS3(t *testing.T) {
 	firstRunCmd.Env = append(baseEnv,
 		"GOCACHEPROG="+binaryPath,
 		"BACKEND_TYPE=s3",
+		"DEBUG=true",
 		"S3_BUCKET="+s3Bucket,
 		"S3_PREFIX="+bucketPrefix+"/")
 
@@ -113,6 +114,7 @@ func TestCacheIntegrationS3(t *testing.T) {
 	secondRunCmd.Env = append(baseEnv,
 		"GOCACHEPROG="+binaryPath,
 		"BACKEND_TYPE=s3",
+		"DEBUG=true",
 		"S3_BUCKET="+s3Bucket,
 		"S3_PREFIX="+bucketPrefix+"/")
 
