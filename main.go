@@ -10,40 +10,106 @@ import (
 	"gobuildcache/backends"
 )
 
+// Global flags
+var (
+	debug       bool
+	backendType string
+	cacheDir    string
+	s3Bucket    string
+	s3Prefix    string
+	s3TmpDir    string
+)
+
 func main() {
-	if len(os.Args) < 2 {
-		// No subcommand, run the server
-		runServer()
-		return
-	}
+	// Check if we have a subcommand
+	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") {
+		subcommand := os.Args[1]
 
-	subcommand := os.Args[1]
-
-	switch subcommand {
-	case "clear":
-		clearCmd := flag.NewFlagSet("clear", flag.ExitOnError)
-		clearCmd.Usage = func() {
-			fmt.Fprintf(os.Stderr, "Usage: %s clear\n", os.Args[0])
-			fmt.Fprintf(os.Stderr, "Clear all entries from the cache.\n")
+		switch subcommand {
+		case "clear":
+			runClearCommand()
+			return
+		case "help", "-h", "--help":
+			printHelp()
+			return
+		default:
+			fmt.Fprintf(os.Stderr, "Unknown subcommand: %s\n\n", subcommand)
+			printHelp()
+			os.Exit(1)
 		}
-		clearCmd.Parse(os.Args[2:])
-		runClear()
-
-	default:
-		fmt.Fprintf(os.Stderr, "Unknown subcommand: %s\n\n", subcommand)
-		fmt.Fprintf(os.Stderr, "Usage: %s [command]\n\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "Commands:\n")
-		fmt.Fprintf(os.Stderr, "  (no command)  Run the cache server\n")
-		fmt.Fprintf(os.Stderr, "  clear         Clear all entries from the cache\n")
-		os.Exit(1)
 	}
+
+	// No subcommand or starts with -, run the server
+	runServerCommand()
+}
+
+func runServerCommand() {
+	serverFlags := flag.NewFlagSet("server", flag.ExitOnError)
+
+	serverFlags.BoolVar(&debug, "debug", false, "Enable debug logging to stderr")
+	serverFlags.StringVar(&backendType, "backend", "disk", "Backend type (disk, s3)")
+	serverFlags.StringVar(&cacheDir, "cache-dir", filepath.Join(os.TempDir(), "gobuildcache"), "Cache directory for disk backend")
+	serverFlags.StringVar(&s3Bucket, "s3-bucket", "", "S3 bucket name (required for s3 backend)")
+	serverFlags.StringVar(&s3Prefix, "s3-prefix", "", "S3 key prefix (optional)")
+	serverFlags.StringVar(&s3TmpDir, "s3-tmp-dir", filepath.Join(os.TempDir(), "gobuildcache-s3"), "Local temp directory for S3 backend")
+
+	serverFlags.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s [flags]\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Run the Go build cache server.\n\n")
+		fmt.Fprintf(os.Stderr, "Flags:\n")
+		serverFlags.PrintDefaults()
+		fmt.Fprintf(os.Stderr, "\nExamples:\n")
+		fmt.Fprintf(os.Stderr, "  # Run with disk backend:\n")
+		fmt.Fprintf(os.Stderr, "  %s -cache-dir=/var/cache/go\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  # Run with S3 backend:\n")
+		fmt.Fprintf(os.Stderr, "  %s -backend=s3 -s3-bucket=my-cache-bucket\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  # Run with debug logging:\n")
+		fmt.Fprintf(os.Stderr, "  %s -debug\n", os.Args[0])
+	}
+
+	serverFlags.Parse(os.Args[1:])
+	runServer()
+}
+
+func runClearCommand() {
+	clearFlags := flag.NewFlagSet("clear", flag.ExitOnError)
+
+	clearFlags.BoolVar(&debug, "debug", false, "Enable debug logging to stderr")
+	clearFlags.StringVar(&backendType, "backend", "disk", "Backend type (disk, s3)")
+	clearFlags.StringVar(&cacheDir, "cache-dir", filepath.Join(os.TempDir(), "gobuildcache"), "Cache directory for disk backend")
+	clearFlags.StringVar(&s3Bucket, "s3-bucket", "", "S3 bucket name (required for s3 backend)")
+	clearFlags.StringVar(&s3Prefix, "s3-prefix", "", "S3 key prefix (optional)")
+	clearFlags.StringVar(&s3TmpDir, "s3-tmp-dir", filepath.Join(os.TempDir(), "gobuildcache-s3"), "Local temp directory for S3 backend")
+
+	clearFlags.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s clear [flags]\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Clear all entries from the cache.\n\n")
+		fmt.Fprintf(os.Stderr, "Flags:\n")
+		clearFlags.PrintDefaults()
+		fmt.Fprintf(os.Stderr, "\nExamples:\n")
+		fmt.Fprintf(os.Stderr, "  # Clear disk cache:\n")
+		fmt.Fprintf(os.Stderr, "  %s clear -cache-dir=/var/cache/go\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  # Clear S3 cache:\n")
+		fmt.Fprintf(os.Stderr, "  %s clear -backend=s3 -s3-bucket=my-cache-bucket\n", os.Args[0])
+	}
+
+	clearFlags.Parse(os.Args[2:])
+	runClear()
+}
+
+func printHelp() {
+	fmt.Fprintf(os.Stderr, "Usage: %s [command] [flags]\n\n", os.Args[0])
+	fmt.Fprintf(os.Stderr, "A remote caching server for Go builds.\n\n")
+	fmt.Fprintf(os.Stderr, "Commands:\n")
+	fmt.Fprintf(os.Stderr, "  (no command)  Run the cache server (default)\n")
+	fmt.Fprintf(os.Stderr, "  clear         Clear all entries from the cache\n")
+	fmt.Fprintf(os.Stderr, "  help          Show this help message\n\n")
+	fmt.Fprintf(os.Stderr, "Run '%s [command] -h' for more information about a command.\n", os.Args[0])
 }
 
 func runServer() {
-	debug := getDebugMode()
-
-	// Create backend (disk or S3)
-	backend, err := createBackend(debug)
+	// Create backend
+	backend, err := createBackend()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating cache backend: %v\n", err)
 		os.Exit(1)
@@ -59,10 +125,8 @@ func runServer() {
 }
 
 func runClear() {
-	debug := getDebugMode()
-
-	// Create backend (disk or S3)
-	backend, err := createBackend(debug)
+	// Create backend
+	backend, err := createBackend()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating cache backend: %v\n", err)
 		os.Exit(1)
@@ -78,47 +142,22 @@ func runClear() {
 	fmt.Fprintf(os.Stdout, "Cache cleared successfully\n")
 }
 
-func getCacheDir() string {
-	cacheDir := os.Getenv("CACHE_DIR")
-	if cacheDir == "" {
-		cacheDir = filepath.Join(os.TempDir(), "gobuildcache")
-	}
-	return cacheDir
-}
-
-func getDebugMode() bool {
-	debugEnv := strings.ToLower(os.Getenv("DEBUG"))
-	return debugEnv == "true"
-}
-
-func createBackend(debug bool) (backends.Backend, error) {
-	backendType := strings.ToLower(os.Getenv("BACKEND_TYPE"))
-
-	if backendType == "" {
-		backendType = "disk" // default to disk backend
-	}
+func createBackend() (backends.Backend, error) {
+	backendType = strings.ToLower(backendType)
 
 	var backend backends.Backend
 	var err error
 
 	switch backendType {
 	case "disk":
-		cacheDir := getCacheDir()
 		backend, err = backends.NewDisk(cacheDir)
 
 	case "s3":
-		bucket := os.Getenv("S3_BUCKET")
-		if bucket == "" {
-			return nil, fmt.Errorf("S3_BUCKET environment variable is required for S3 backend")
+		if s3Bucket == "" {
+			return nil, fmt.Errorf("-s3-bucket flag is required for S3 backend")
 		}
 
-		prefix := os.Getenv("S3_PREFIX")
-		tmpDir := os.Getenv("S3_TMP_DIR")
-		if tmpDir == "" {
-			tmpDir = filepath.Join(os.TempDir(), "gobuildcache-s3")
-		}
-
-		backend, err = backends.NewS3(bucket, prefix, tmpDir)
+		backend, err = backends.NewS3(s3Bucket, s3Prefix, s3TmpDir)
 
 	default:
 		return nil, fmt.Errorf("unknown backend type: %s (supported: disk, s3)", backendType)
