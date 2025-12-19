@@ -57,8 +57,8 @@ func runServerCommand() {
 	errorRateDefault := getEnvFloat("ERROR_RATE", 0.0)
 
 	serverFlags.BoolVar(&debug, "debug", debugDefault, "Enable debug logging to stderr (env: DEBUG)")
-	serverFlags.StringVar(&backendType, "backend", backendDefault, "Backend type: disk, s3 (env: BACKEND_TYPE)")
-	serverFlags.StringVar(&cacheDir, "cache-dir", cacheDirDefault, "Cache directory for disk backend (env: CACHE_DIR)")
+	serverFlags.StringVar(&backendType, "backend", backendDefault, "Backend type: disk (local only), s3 (env: BACKEND_TYPE)")
+	serverFlags.StringVar(&cacheDir, "cache-dir", cacheDirDefault, "Local cache directory (env: CACHE_DIR)")
 	serverFlags.StringVar(&s3Bucket, "s3-bucket", s3BucketDefault, "S3 bucket name (required for s3 backend) (env: S3_BUCKET)")
 	serverFlags.StringVar(&s3Prefix, "s3-prefix", s3PrefixDefault, "S3 key prefix (optional) (env: S3_PREFIX)")
 	serverFlags.StringVar(&s3TmpDir, "s3-tmp-dir", s3TmpDirDefault, "Local temp directory for S3 backend (env: S3_TMP_DIR)")
@@ -72,7 +72,7 @@ func runServerCommand() {
 		fmt.Fprintf(os.Stderr, "\nEnvironment Variables:\n")
 		fmt.Fprintf(os.Stderr, "  DEBUG          Enable debug logging (true/false)\n")
 		fmt.Fprintf(os.Stderr, "  BACKEND_TYPE   Backend type (disk, s3)\n")
-		fmt.Fprintf(os.Stderr, "  CACHE_DIR      Cache directory for disk backend\n")
+		fmt.Fprintf(os.Stderr, "  CACHE_DIR      Local cache directory\n")
 		fmt.Fprintf(os.Stderr, "  S3_BUCKET      S3 bucket name\n")
 		fmt.Fprintf(os.Stderr, "  S3_PREFIX      S3 key prefix\n")
 		fmt.Fprintf(os.Stderr, "  S3_TMP_DIR     Local temp directory for S3 backend\n")
@@ -104,8 +104,8 @@ func runClearCommand() {
 	s3TmpDirDefault := getEnv("S3_TMP_DIR", filepath.Join(os.TempDir(), "gobuildcache-s3"))
 
 	clearFlags.BoolVar(&debug, "debug", debugDefault, "Enable debug logging to stderr (env: DEBUG)")
-	clearFlags.StringVar(&backendType, "backend", backendDefault, "Backend type: disk, s3 (env: BACKEND_TYPE)")
-	clearFlags.StringVar(&cacheDir, "cache-dir", cacheDirDefault, "Cache directory for disk backend (env: CACHE_DIR)")
+	clearFlags.StringVar(&backendType, "backend", backendDefault, "Backend type: disk (local only), s3 (env: BACKEND_TYPE)")
+	clearFlags.StringVar(&cacheDir, "cache-dir", cacheDirDefault, "Local cache directory (env: CACHE_DIR)")
 	clearFlags.StringVar(&s3Bucket, "s3-bucket", s3BucketDefault, "S3 bucket name (required for s3 backend) (env: S3_BUCKET)")
 	clearFlags.StringVar(&s3Prefix, "s3-prefix", s3PrefixDefault, "S3 key prefix (optional) (env: S3_PREFIX)")
 	clearFlags.StringVar(&s3TmpDir, "s3-tmp-dir", s3TmpDirDefault, "Local temp directory for S3 backend (env: S3_TMP_DIR)")
@@ -118,7 +118,7 @@ func runClearCommand() {
 		fmt.Fprintf(os.Stderr, "\nEnvironment Variables:\n")
 		fmt.Fprintf(os.Stderr, "  DEBUG          Enable debug logging (true/false)\n")
 		fmt.Fprintf(os.Stderr, "  BACKEND_TYPE   Backend type (disk, s3)\n")
-		fmt.Fprintf(os.Stderr, "  CACHE_DIR      Cache directory for disk backend\n")
+		fmt.Fprintf(os.Stderr, "  CACHE_DIR      Local cache directory\n")
 		fmt.Fprintf(os.Stderr, "  S3_BUCKET      S3 bucket name\n")
 		fmt.Fprintf(os.Stderr, "  S3_PREFIX      S3 key prefix\n")
 		fmt.Fprintf(os.Stderr, "  S3_TMP_DIR     Local temp directory for S3 backend\n")
@@ -196,7 +196,8 @@ func createBackend() (backends.Backend, error) {
 
 	switch backendType {
 	case "disk":
-		backend, err = backends.NewDisk(cacheDir)
+		// Use no-op backend - local caching is handled by server.go
+		backend = backends.NewNoop()
 
 	case "s3":
 		if s3Bucket == "" {
