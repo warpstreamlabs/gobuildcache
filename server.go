@@ -49,29 +49,37 @@ type Response struct {
 
 // CacheProg implements the GOCACHEPROG protocol.
 type CacheProg struct {
-	backend       backends.Backend
-	reader        *bufio.Reader
-	writer        *bufio.Writer
-	writerLock    sync.Mutex
-	debug         bool
+	backend backends.Backend
+	reader  *bufio.Reader
+	writer  struct {
+		sync.Mutex
+		w *bufio.Writer
+	}
+
+	debug bool
+
+	// Stats.
+	seenActionIDs struct {
+		sync.Mutex
+		ids map[string]int // Maps action ID to request count
+	}
+	duplicateGets atomic.Int64
+	duplicatePuts atomic.Int64
 	putCount      atomic.Int64
 	getCount      atomic.Int64
 	hitCount      atomic.Int64
-	seenActionIDs map[string]int // Maps action ID to request count
-	seenLock      sync.Mutex
-	duplicateGets atomic.Int64
-	duplicatePuts atomic.Int64
 }
 
 // NewCacheProg creates a new cache program instance.
 func NewCacheProg(backend backends.Backend, debug bool) *CacheProg {
-	return &CacheProg{
-		backend:       backend,
-		reader:        bufio.NewReader(os.Stdin),
-		writer:        bufio.NewWriter(os.Stdout),
-		debug:         debug,
-		seenActionIDs: make(map[string]int),
+	cp := &CacheProg{
+		backend: backend,
+		reader:  bufio.NewReader(os.Stdin),
+		debug:   debug,
 	}
+	cp.writer.w = bufio.NewWriter(os.Stdout)
+	cp.seenActionIDs.ids = make(map[string]int)
+	return cp
 }
 
 // SendResponse sends a response to stdout (thread-safe).
@@ -81,18 +89,18 @@ func (cp *CacheProg) SendResponse(resp Response) error {
 		return fmt.Errorf("failed to marshal response: %w", err)
 	}
 
-	cp.writerLock.Lock()
-	defer cp.writerLock.Unlock()
+	cp.writer.Lock()
+	defer cp.writer.Unlock()
 
-	if _, err := cp.writer.Write(data); err != nil {
+	if _, err := cp.writer.w.Write(data); err != nil {
 		return fmt.Errorf("failed to write response: %w", err)
 	}
 
-	if err := cp.writer.WriteByte('\n'); err != nil {
+	if err := cp.writer.w.WriteByte('\n'); err != nil {
 		return fmt.Errorf("failed to write newline: %w", err)
 	}
 
-	return cp.writer.Flush()
+	return cp.writer.w.Flush()
 }
 
 // SendInitialResponse sends the initial response with capabilities.
@@ -174,11 +182,11 @@ func (cp *CacheProg) trackActionID(actionID []byte) bool {
 
 	actionIDStr := hex.EncodeToString(actionID)
 
-	cp.seenLock.Lock()
-	defer cp.seenLock.Unlock()
+	cp.seenActionIDs.Lock()
+	defer cp.seenActionIDs.Unlock()
 
-	count := cp.seenActionIDs[actionIDStr]
-	cp.seenActionIDs[actionIDStr] = count + 1
+	count := cp.seenActionIDs.ids[actionIDStr]
+	cp.seenActionIDs.ids[actionIDStr] = count + 1
 
 	return count > 0 // It's a duplicate if we've seen it before
 }
@@ -323,9 +331,9 @@ func (cp *CacheProg) Run() error {
 			hitRate = float64(hitCount) / float64(getCount) * 100
 		}
 
-		cp.seenLock.Lock()
-		uniqueActionIDs := len(cp.seenActionIDs)
-		cp.seenLock.Unlock()
+		cp.seenActionIDs.Lock()
+		uniqueActionIDs := len(cp.seenActionIDs.ids)
+		cp.seenActionIDs.Unlock()
 
 		fmt.Fprintf(os.Stderr, "[DEBUG] Cache statistics:\n")
 		fmt.Fprintf(os.Stderr, "[DEBUG]   GET operations: %d (hits: %d, misses: %d, hit rate: %.1f%%)\n",
