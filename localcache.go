@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -89,9 +90,6 @@ func (lc *localCache) readMetadata(actionID []byte) (*localCacheMetadata, error)
 
 	data, err := os.ReadFile(metaPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("metadata file not found")
-		}
 		return nil, fmt.Errorf("failed to read metadata: %w", err)
 	}
 
@@ -186,18 +184,27 @@ func (lc *localCache) check(actionID []byte) *localCacheMetadata {
 	// If the data file doesn't exist, the metadata file likely won't either
 	meta, err := lc.readMetadata(actionID)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			// Neither data nor metadata exists - this is a cache miss
 			return nil
 		}
+
+		lc.logger.Warn(
+			"failed to read local cache metadata",
+			"actionID", hex.EncodeToString(actionID),
+			"error", err,
+		)
+
 		// Metadata is missing or corrupted but data file might exist
 		// Check if data file exists
 		diskPath := lc.actionIDToPath(actionID)
 		if _, statErr := os.Stat(diskPath); statErr == nil {
 			// Data file exists but metadata is missing/corrupted
-			lc.logger.Warn("local cache file exists but metadata is missing/corrupted",
+			lc.logger.Warn(
+				"local cache file exists but metadata is missing/corrupted",
 				"actionID", hex.EncodeToString(actionID),
-				"error", err)
+				"error", err,
+			)
 		}
 		return nil
 	}

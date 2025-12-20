@@ -300,6 +300,13 @@ func (cp *CacheProg) handlePut(req *Request) (Response, error) {
 
 	key := hex.EncodeToString(req.ActionID)
 	v, err := cp.locker.DoWithLock(key, func() (interface{}, error) {
+		// Someone may have cached the result already, so check the local cache first
+		// before doing anything expensive.
+		existingMeta := cp.localCache.check(req.ActionID)
+		if existingMeta != nil {
+			return &putResult{diskPath: cp.localCache.getPath(req.ActionID)}, nil
+		}
+
 		// Read body into memory (we need to write it to both local cache and backend)
 		var bodyData []byte
 		if req.BodySize > 0 && req.Body != nil {
