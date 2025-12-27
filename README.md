@@ -95,6 +95,32 @@ TODO: Confirm these
 }
 ```
 
+## S3 Lifecycle Policy
+
+It's recommended to configure a lifecycle policy on your S3 bucket to automatically expire old cache entries and control storage costs. Build cache data is typically only useful for a limited time (e.g., a few days to a week), after which it's likely stale.
+
+Here's a sample lifecycle policy that expires objects after 7 days and aborts incomplete multipart uploads after 24 hours:
+
+```json
+{
+  "Rules": [
+    {
+      "Id": "ExpireOldCacheEntries",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": ""
+      },
+      "Expiration": {
+        "Days": 7
+      },
+      "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 1
+      }
+    }
+  ]
+}
+```
+
 In normal circumstances you should never have to run the `gobuildcache` binary directly, it will be instead be invoked by the go compiler (hence why configuration is managed via environment variables instead of command line flags). However, the `gobuildcache` binary ships with a `clear` command that can be used to 
 
 # Configuration
