@@ -249,10 +249,6 @@ func (cp *CacheProg) ReadRequest() (*Request, error) {
 
 // trackActionID records an action ID and returns whether it's a duplicate.
 func (cp *CacheProg) trackActionID(actionID []byte) bool {
-	if !cp.debug {
-		return false
-	}
-
 	actionIDStr := hex.EncodeToString(actionID)
 
 	cp.seenActionIDs.Lock()
