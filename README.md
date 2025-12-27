@@ -1,9 +1,6 @@
 # Go Build Cache Server
 
-TODO: Clear command
 TODO: Assumes ephemeral storage
-TODO: Link depot blog post
-TODO: Lifecycle policy
 TODO: Do we need to handle failed PUTs? I.E clean up if we fail to write and/or checksumming.
 TODO: Github actions example
 TODO: Actually use HandleRequestWithRetries instead of HandleRequest.
@@ -121,7 +118,39 @@ Here's a sample lifecycle policy that expires objects after 7 days and aborts in
 }
 ```
 
-In normal circumstances you should never have to run the `gobuildcache` binary directly, it will be instead be invoked by the go compiler (hence why configuration is managed via environment variables instead of command line flags). However, the `gobuildcache` binary ships with a `clear` command that can be used to 
+In normal circumstances you should never have to run the `gobuildcache` binary directly, it will be instead be invoked by the go compiler (hence why configuration is managed via environment variables instead of command line flags). However, the `gobuildcache` binary ships with `clear` commands for cache management:
+
+## Clear Commands
+
+### Clear Local Cache
+
+Removes all cached files from the local filesystem cache directory:
+
+```bash
+gobuildcache clear-local
+```
+
+You can specify a custom cache directory:
+
+```bash
+gobuildcache clear-local -cache-dir=/custom/cache/path
+# Or using environment variables:
+CACHE_DIR=/custom/cache/path gobuildcache clear-local
+```
+
+### Clear Remote Cache
+
+Clears all entries from the remote backend (e.g., S3):
+
+```bash
+# Using command-line flags:
+gobuildcache clear-remote -backend=s3 -s3-bucket=my-cache-bucket
+
+# Or using environment variables:
+BACKEND_TYPE=s3 S3_BUCKET=my-cache-bucket gobuildcache clear-remote
+```
+
+**Warning**: The `clear-remote` command will delete all cached objects from your S3 bucket. Use with caution, especially in shared environments. 
 
 # Configuration
 

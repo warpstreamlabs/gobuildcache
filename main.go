@@ -34,6 +34,12 @@ func main() {
 		case "clear":
 			runClearCommand()
 			return
+		case "clear-local":
+			runClearLocalCommand()
+			return
+		case "clear-remote":
+			runClearRemoteCommand()
+			return
 		case "help", "-h", "--help":
 			printHelp()
 			return
@@ -145,12 +151,106 @@ func runClearCommand() {
 	runClear()
 }
 
+func runClearLocalCommand() {
+	clearLocalFlags := flag.NewFlagSet("clear-local", flag.ExitOnError)
+
+	// Get defaults from environment variables
+	debugDefault := getEnvBool("DEBUG", false)
+	cacheDirDefault := getEnv("CACHE_DIR", filepath.Join(os.TempDir(), "gobuildcache", "cache"))
+
+	clearLocalFlags.BoolVar(&debug, "debug", debugDefault, "Enable debug logging to stderr (env: DEBUG)")
+	clearLocalFlags.StringVar(&cacheDir, "cache-dir", cacheDirDefault, "Local cache directory (env: CACHE_DIR)")
+
+	clearLocalFlags.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s clear-local [flags]\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Clear only the local filesystem cache directory.\n\n")
+		fmt.Fprintf(os.Stderr, "Flags (can also be set via environment variables):\n")
+		clearLocalFlags.PrintDefaults()
+		fmt.Fprintf(os.Stderr, "\nEnvironment Variables:\n")
+		fmt.Fprintf(os.Stderr, "  DEBUG          Enable debug logging (true/false)\n")
+		fmt.Fprintf(os.Stderr, "  CACHE_DIR      Local cache directory\n")
+		fmt.Fprintf(os.Stderr, "\nNote: Command-line flags take precedence over environment variables.\n")
+		fmt.Fprintf(os.Stderr, "\nExamples:\n")
+		fmt.Fprintf(os.Stderr, "  # Clear local cache using default directory:\n")
+		fmt.Fprintf(os.Stderr, "  %s clear-local\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  # Clear local cache using custom directory:\n")
+		fmt.Fprintf(os.Stderr, "  %s clear-local -cache-dir=/var/cache/go\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  # Clear using environment variables:\n")
+		fmt.Fprintf(os.Stderr, "  CACHE_DIR=/var/cache/go %s clear-local\n", os.Args[0])
+	}
+
+	clearLocalFlags.Parse(os.Args[2:])
+
+	// Clear the local cache directory
+	if err := clearLocalCache(cacheDir); err != nil {
+		fmt.Fprintf(os.Stderr, "Error clearing local cache: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Fprintf(os.Stdout, "Local cache cleared successfully\n")
+}
+
+func runClearRemoteCommand() {
+	clearRemoteFlags := flag.NewFlagSet("clear-remote", flag.ExitOnError)
+
+	// Get defaults from environment variables
+	debugDefault := getEnvBool("DEBUG", false)
+	backendDefault := getEnv("BACKEND_TYPE", getEnv("BACKEND", "disk"))
+	s3BucketDefault := getEnv("S3_BUCKET", "")
+	s3PrefixDefault := getEnv("S3_PREFIX", "")
+
+	clearRemoteFlags.BoolVar(&debug, "debug", debugDefault, "Enable debug logging to stderr (env: DEBUG)")
+	clearRemoteFlags.StringVar(&backendType, "backend", backendDefault, "Backend type: disk, s3 (env: BACKEND_TYPE)")
+	clearRemoteFlags.StringVar(&s3Bucket, "s3-bucket", s3BucketDefault, "S3 bucket name (required for s3 backend) (env: S3_BUCKET)")
+	clearRemoteFlags.StringVar(&s3Prefix, "s3-prefix", s3PrefixDefault, "S3 key prefix (optional) (env: S3_PREFIX)")
+
+	clearRemoteFlags.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s clear-remote [flags]\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Clear only the remote backend cache (e.g., S3).\n\n")
+		fmt.Fprintf(os.Stderr, "Flags (can also be set via environment variables):\n")
+		clearRemoteFlags.PrintDefaults()
+		fmt.Fprintf(os.Stderr, "\nEnvironment Variables:\n")
+		fmt.Fprintf(os.Stderr, "  DEBUG          Enable debug logging (true/false)\n")
+		fmt.Fprintf(os.Stderr, "  BACKEND_TYPE   Backend type (disk, s3)\n")
+		fmt.Fprintf(os.Stderr, "  S3_BUCKET      S3 bucket name\n")
+		fmt.Fprintf(os.Stderr, "  S3_PREFIX      S3 key prefix\n")
+		fmt.Fprintf(os.Stderr, "\nNote: Command-line flags take precedence over environment variables.\n")
+		fmt.Fprintf(os.Stderr, "\nExamples:\n")
+		fmt.Fprintf(os.Stderr, "  # Clear S3 cache using flags:\n")
+		fmt.Fprintf(os.Stderr, "  %s clear-remote -backend=s3 -s3-bucket=my-cache-bucket\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  # Clear S3 cache with prefix:\n")
+		fmt.Fprintf(os.Stderr, "  %s clear-remote -backend=s3 -s3-bucket=my-cache-bucket -s3-prefix=myproject/\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  # Clear using environment variables:\n")
+		fmt.Fprintf(os.Stderr, "  BACKEND_TYPE=s3 S3_BUCKET=my-cache-bucket %s clear-remote\n", os.Args[0])
+	}
+
+	clearRemoteFlags.Parse(os.Args[2:])
+
+	// Create backend
+	backend, err := createBackend()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating backend: %v\n", err)
+		os.Exit(1)
+	}
+	defer backend.Close()
+
+	// Clear the backend (remote storage)
+	if err := backend.Clear(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error clearing backend cache: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Fprintf(os.Stdout, "Remote cache cleared successfully\n")
+}
+
 func printHelp() {
 	fmt.Fprintf(os.Stderr, "Usage: %s [command] [flags]\n\n", os.Args[0])
 	fmt.Fprintf(os.Stderr, "A remote caching server for Go builds.\n\n")
 	fmt.Fprintf(os.Stderr, "Commands:\n")
 	fmt.Fprintf(os.Stderr, "  (no command)  Run the cache server (default)\n")
-	fmt.Fprintf(os.Stderr, "  clear         Clear all entries from the cache\n")
+	fmt.Fprintf(os.Stderr, "  clear         Clear both local and remote cache entries\n")
+	fmt.Fprintf(os.Stderr, "  clear-local   Clear only local cache directory\n")
+	fmt.Fprintf(os.Stderr, "  clear-remote  Clear only remote backend cache\n")
 	fmt.Fprintf(os.Stderr, "  help          Show this help message\n\n")
 	fmt.Fprintf(os.Stderr, "Configuration:\n")
 	fmt.Fprintf(os.Stderr, "  Flags can be set via command-line arguments or environment variables.\n")
