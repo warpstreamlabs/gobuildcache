@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,17 +14,17 @@ import (
 
 // Global flags
 var (
-	debug       bool
-	printStats  bool
-	backendType string
-	lockingType string
-	lockDir     string
-	cacheDir    string
-	s3Bucket    string
-	s3Prefix    string
-	s3TmpDir    string
-	errorRate   float64
-	compression bool
+	debug        bool
+	printStats   bool
+	backendType  string
+	lockingType  string
+	lockDir      string
+	cacheDir     string
+	s3Bucket     string
+	s3Prefix     string
+	errorRate    float64
+	compression  bool
+	asyncBackend bool
 )
 
 func main() {
@@ -69,6 +70,7 @@ func runServerCommand() {
 	s3PrefixDefault := getEnv("S3_PREFIX", "")
 	errorRateDefault := getEnvFloat("ERROR_RATE", 0.0)
 	compressionDefault := getEnvBool("COMPRESSION", true)
+	asyncBackendDefault := getEnvBool("ASYNC_BACKEND", true)
 
 	serverFlags.BoolVar(&debug, "debug", debugDefault, "Enable debug logging to stderr (env: DEBUG)")
 	serverFlags.BoolVar(&printStats, "stats", printStatsDefault, "Print cache statistics on exit (env: PRINT_STATS)")
@@ -80,6 +82,7 @@ func runServerCommand() {
 	serverFlags.StringVar(&s3Prefix, "s3-prefix", s3PrefixDefault, "S3 key prefix (optional) (env: S3_PREFIX)")
 	serverFlags.Float64Var(&errorRate, "error-rate", errorRateDefault, "Error injection rate (0.0-1.0) for testing error handling (env: ERROR_RATE)")
 	serverFlags.BoolVar(&compression, "compression", compressionDefault, "Enable LZ4 compression for backend storage (env: COMPRESSION)")
+	serverFlags.BoolVar(&asyncBackend, "async-backend", asyncBackendDefault, "Enable async backend writer for non-blocking PUT operations (env: ASYNC_BACKEND)")
 
 	serverFlags.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [flags]\n\n", os.Args[0])
@@ -96,6 +99,7 @@ func runServerCommand() {
 		fmt.Fprintf(os.Stderr, "  S3_BUCKET        S3 bucket name\n")
 		fmt.Fprintf(os.Stderr, "  S3_PREFIX        S3 key prefix\n")
 		fmt.Fprintf(os.Stderr, "  COMPRESSION      Enable LZ4 compression (true/false)\n")
+		fmt.Fprintf(os.Stderr, "  ASYNC_BACKEND    Enable async backend writer (true/false)\n")
 		fmt.Fprintf(os.Stderr, "\nNote: Command-line flags take precedence over environment variables.\n")
 		fmt.Fprintf(os.Stderr, "\nExamples:\n")
 		fmt.Fprintf(os.Stderr, "  # Run with disk backend using flags:\n")
@@ -358,6 +362,20 @@ func createBackend() (backends.Backend, error) {
 	if errorRate > 0 {
 		backend = backends.NewError(backend, errorRate)
 		fmt.Fprintf(os.Stderr, "[INFO] Error injection enabled with rate: %.2f%%\n", errorRate*100)
+	}
+
+	// Wrap with async backend if enabled
+	if asyncBackend {
+		// Create logger for async backend
+		logLevel := slog.LevelInfo
+		if debug {
+			logLevel = slog.LevelDebug
+		}
+		logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+			Level: logLevel,
+		}))
+		backend = backends.NewAsyncBackendWriter(backend, logger)
+		fmt.Fprintf(os.Stderr, "[INFO] Async backend writer enabled\n")
 	}
 
 	// Wrap with debug backend if debug mode is enabled
