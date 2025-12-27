@@ -1,6 +1,5 @@
 # Go Build Cache Server
 
-TODO: Why not S3 (too slow)
 TODO: Clear command
 TODO: Assumes ephemeral storage
 TODO: Link depot blog post
@@ -10,12 +9,15 @@ TODO: Github actions example
 TODO: Actually use HandleRequestWithRetries instead of HandleRequest.
 TODO: Move async_backend.go to backends package
 TODO: Track bytes written/read.
+TODO: Actually use async backend.
 
 `gobuildcache` implements the [gocacheprog](TODO: LINK) interface defined by the Go compiler over a variety of storage backends, the most important of which is S3 Express One Zone (henceforth referred to as S3OZ). Its primary purpose is to accelerate CI (both compilation and tests) for large Go repositories.
 
 Effectively, `gobuildcache` leverages S3OZ as a distributed build cache for concurrent `go build` or `go test` processes regardless of whether they're running on a single machine or distributed across a fleet of CI VMs. This dramatically improves the performance of CI for large Go repositories because every CI process will behave as if it is running with an almost completely pre-populated build cache, even if the CI process was started on a completely ephemeral VM that has never compiled code or executed tests for the repository before.
 
 This is similar in spirit to the common pattern of restoring a shared go build cache at the beginning of the CI run, and then saving the freshly updated go build cache at the beginning of the CI run so it can be restored by subsequent CI jobs. However, the approach taken by `gobuildcache` is much more efficient resulting in dramatically lower CI times (and bills) with significantly less "CI engineering" required. For more details on why the approach taken by `gobuildcache` is better, see the "Why Should I Use gobuildcache" section.
+
+`gobuildcache` is designed to use S3OZ as a remote / distributed cache, but it still writes build cache data to the local filesystem. There is no way to avoid this due to the nature of the `GOCACHEPROG` protocol implemented by the Go toolchain. As a result, CI runners using `gobuildcache` will still need some amount of ephemeral storage. Also, keep in mind that `gobuildcache` assumes ephemeral storage and does not ever GC or trim either the local filesystem cache
 
 # Quick Start
 
@@ -103,7 +105,7 @@ In normal circumstances you should never have to run the `gobuildcache` binary d
 
 # How it Works
 
-`gobuildcache` runs a server that processes commands from the Go compiler over stdin and writes results over stdout. 
+`gobuildcache` runs a server that processes commands from the Go compiler over stdin and writes results over stdout. Ultimately, `GET` and `PUT` commands are processed by remote backends like S3OZ, but first they're proxied through the local filesystem.
 
 ## Processing `GET` commands
 
