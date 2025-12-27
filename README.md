@@ -15,7 +15,7 @@ Effectively, `gobuildcache` leverages S3OZ as a distributed build cache for conc
 
 This is similar in spirit to the common pattern of restoring a shared go build cache at the beginning of the CI run, and then saving the freshly updated go build cache at the beginning of the CI run so it can be restored by subsequent CI jobs. However, the approach taken by `gobuildcache` is much more efficient resulting in dramatically lower CI times (and bills) with significantly less "CI engineering" required. For more details on why the approach taken by `gobuildcache` is better, see the "Why Should I Use gobuildcache" section.
 
-`gobuildcache` is designed to use S3OZ as a remote / distributed cache, but it still writes build cache data to the local filesystem. There is no way to avoid this due to the nature of the `GOCACHEPROG` protocol implemented by the Go toolchain. As a result, CI runners using `gobuildcache` will still need some amount of ephemeral storage. Also, keep in mind that `gobuildcache` assumes ephemeral storage and does not ever GC or trim either the local filesystem cache
+`gobuildcache` is designed to use S3OZ as a remote / distributed cache, but it still writes build cache data to the local filesystem. There is no way to avoid this due to the nature of the `GOCACHEPROG` protocol implemented by the Go toolchain. As a result, CI runners using `gobuildcache` will still need some amount of ephemeral storage. Also, keep in mind that `gobuildcache` assumes ephemeral storage and does not ever GC or trim either the local filesystem cache. See the "Preventing Cache Bloat" section for more details on that.
 
 # Quick Start
 
