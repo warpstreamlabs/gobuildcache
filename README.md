@@ -1,7 +1,6 @@
 # Go Build Cache Server
 
 TODO: Do we need to handle failed PUTs? I.E clean up if we fail to write and/or checksumming.
-TODO: Actually use HandleRequestWithRetries instead of HandleRequest.
 TODO: Rename to goremotecache.
 TODO: Prefix for all environment variables
 
